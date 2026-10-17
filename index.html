@@ -181,28 +181,63 @@ function pick(k){
   <a class="card" href="#t/${k}/mcq"><span class="ic">&#9989;</span><div><b>MCQ Test</b><span class="s">${t.mcq.length} questions &middot; instant result</span></div></a>
   <a class="card" href="#t/${k}/def"><span class="ic">&#9997;</span><div><b>Definition Test</b><span class="s">${t.def.length} written answers &middot; reviewed by teacher</span></div></a></div>`;
 }
+let cleanup=null;
 function quiz(k,type){
   const t=T[k],qs=t[type],isM=type==="mcq";
   app.innerHTML=`<nav><a href="#t/${k}">&larr; Back</a></nav><h2>${t.n}: ${isM?"MCQ":"Definition"} Test</h2>
-  <div class="card"><label>Name<input id="nm"></label><label>Email<input id="em" type="email"></label><label>Phone number<input id="ph" type="tel"></label></div>
+  <div class="card" id="intro"><label>Name<input id="nm"></label><label>Email<input id="em" type="email"></label><label>Phone number<input id="ph" type="tel"></label>
+  <p class="sub"><b>Rules:</b> the test opens in full screen. Do not switch tabs or apps, minimise the window or leave full screen. Each time you do, you get a warning. After 3 warnings your test is submitted automatically. Copy, paste and right-click are blocked.</p>
+  <button id="start">Start Test</button><p id="msg0" class="bad"></p></div>
+  <div id="run" style="display:none"><div class="card" id="bar" style="position:sticky;top:52px;z-index:4;padding:10px 16px;margin-bottom:14px"><b>Warnings: <span id="wc">0</span> / 3</b></div>
   <div id="qs">${qs.map((q,i)=>isM?`<div class="card" id="q${i}"><b>${i+1}. ${esc(q[0])}</b>${q[1].map((o,j)=>`<label class="o"><input type="radio" name="q${i}" value="${j}" style="width:auto;margin:0 8px 0 0">${esc(o)}</label>`).join("")}</div>`
    :`<div class="card"><b>${i+1}. ${esc(q)}</b><textarea rows="4" name="q${i}"></textarea></div>`).join("")}</div>
-  <button id="sub">Submit</button><p id="msg"></p>`;
-  document.getElementById('sub').onclick=async()=>{
-    const name=nm.value.trim(),email=em.value.trim(),phone=ph.value.trim(),msg=document.getElementById('msg');
-    if(!name||!/^\S+@\S+\.\S+$/.test(email)||phone.length<7){msg.textContent="Please enter your name, a valid email and phone number.";msg.className="bad";scrollTo(0,0);return}
+  <button id="sub">Submit</button></div><p id="msg"></p>`;
+  let warns=0,active=false,done=false,last=0,fsOk=false,md=null,info={};
+  const block=e=>{if(active)e.preventDefault()};
+  const leave=e=>{if(active){e.preventDefault();e.returnValue=""}};
+  const onVis=()=>{if(document.hidden)warn("You switched tab or app.")};
+  const onBlur=()=>warn("You left the test window.");
+  const onFs=()=>{if(fsOk&&!document.fullscreenElement)warn("You exited full screen.")};
+  function fs(){if(fsOk&&!document.fullscreenElement)document.documentElement.requestFullscreen().catch(()=>{})}
+  function stop(){active=false;["copy","cut","paste","contextmenu"].forEach(n=>document.removeEventListener(n,block));
+    document.removeEventListener("visibilitychange",onVis);removeEventListener("blur",onBlur);document.removeEventListener("fullscreenchange",onFs);removeEventListener("beforeunload",leave);
+    if(md)md.remove();if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})}
+  cleanup=stop;
+  function warn(why){
+    if(!active||done||Date.now()-last<1500)return;last=Date.now();warns++;document.getElementById('wc').textContent=warns;
+    if(warns>=3){finish(true);return}
+    if(md)md.remove();md=document.createElement("div");
+    md.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:99;padding:20px";
+    md.innerHTML=`<div class="card" style="max-width:380px;text-align:center"><h2 class="bad">&#9888; Warning ${warns} / 3</h2><p>${why}<br>After 3 warnings your test will be submitted automatically.</p><button>OK, continue</button></div>`;
+    md.querySelector("button").onclick=()=>{md.remove();md=null;fs()};document.body.appendChild(md);
+  }
+  document.getElementById('start').onclick=async()=>{
+    const name=nm.value.trim(),email=em.value.trim(),phone=ph.value.trim();
+    if(!name||!/^\S+@\S+\.\S+$/.test(email)||phone.length<7){msg0.textContent="Please enter your name, a valid email and phone number.";return}
+    info={name,email,phone};
+    try{await document.documentElement.requestFullscreen();fsOk=true}catch(e){fsOk=false}
+    document.getElementById('intro').style.display="none";document.getElementById('run').style.display="block";scrollTo(0,0);
+    active=true;last=Date.now()+1500;
+    ["copy","cut","paste","contextmenu"].forEach(n=>document.addEventListener(n,block));
+    document.addEventListener("visibilitychange",onVis);addEventListener("blur",onBlur);document.addEventListener("fullscreenchange",onFs);addEventListener("beforeunload",leave);
+  };
+  document.getElementById('sub').onclick=()=>{if(confirm("Submit your test now?"))finish(false)};
+  async function finish(auto){
+    if(done)return;done=true;stop();
     let score=0,answers=[];
     qs.forEach((q,i)=>{
       if(isM){const c=document.querySelector(`input[name=q${i}]:checked`),a=c?+c.value:-1;if(a===q[2])score++;
         answers.push({q:q[0],a:a<0?"(no answer)":q[1][a],correct:q[1][q[2]]});
         document.querySelectorAll(`input[name=q${i}]`).forEach(r=>{const l=r.parentElement;r.disabled=true;if(+r.value===q[2])l.classList.add("ok");else if(+r.value===a)l.classList.add("bad")})}
       else answers.push({q,a:document.querySelector(`textarea[name=q${i}]`).value.trim()})});
-    sub.disabled=true;sub.textContent="Submitting...";
-    const ok=await send({time:new Date().toISOString(),test:t.n,type:isM?"MCQ":"Definition",name,email,phone,score:isM?score:"",total:isM?qs.length:"",answers});
-    sub.remove();
-    msg.className=isM?"res":"";msg.innerHTML=(isM?`<span class="score">Your score: ${score} / ${qs.length}</span><br>Green = correct answer, red = your wrong answer.`:"Your answers have been submitted. Your teacher will review them.")+(ok?"":`<br><span class="bad">Warning: could not save to the server. Tell your teacher.</span>`);
-    if(isM)document.getElementById('qs').scrollIntoView();else scrollTo(0,document.body.scrollHeight);
-  };
+    const sub=document.getElementById('sub');sub.remove();document.getElementById('bar').remove();
+    const msg=document.getElementById('msg');msg.textContent="Submitting...";
+    const tag=(isM?"MCQ":"Definition")+(warns?` (warnings: ${warns}${auto?", auto-submitted":""})`:"");
+    const ok=await send({time:new Date().toISOString(),test:t.n,type:tag,...info,score:isM?score:"",total:isM?qs.length:"",answers});
+    msg.className=isM?"res":"";
+    msg.innerHTML=(auto?`<b class="bad">Your test was submitted automatically after 3 warnings.</b><br>`:"")+(isM?`<span class="score">Your score: ${score} / ${qs.length}</span><br>Green = correct answer, red = your wrong answer.`:"Your answers have been submitted. Your teacher will review them.")+(ok?"":`<br><span class="bad">Warning: could not save to the server. Tell your teacher.</span>`);
+    document.getElementById('qs').scrollIntoView();
+  }
 }
 async function admin(){
   const pw=prompt("Teacher password");if(pw===null){location.hash="";return}
@@ -216,7 +251,7 @@ async function admin(){
   ${rows.map(r=>{const a=typeof r.answers==="string"?JSON.parse(r.answers):r.answers;return `<details class="card"><summary><b>${esc(r.name)}</b> &middot; ${esc(r.test)} (${esc(r.type)}) ${r.total?`&middot; ${esc(r.score)}/${esc(r.total)}`:""}<br><small class="sub">${esc(r.email)} &middot; ${esc(r.phone)} &middot; ${new Date(r.time).toLocaleString()}</small></summary>
   ${a.map((x,i)=>`<pre><b>${i+1}. ${esc(x.q)}</b>\n${esc(x.a||"(blank)")}${x.correct!==undefined?`\n<span class="${x.a===x.correct?"ok":"bad"}">Correct: ${esc(x.correct)}</span>`:""}</pre>`).join("")}</details>`}).join("")||"<p>No responses yet.</p>"}`;
 }
-function route(){const p=location.hash.slice(1).split("/");
+function route(){if(cleanup){cleanup();cleanup=null}const p=location.hash.slice(1).split("/");
   if(p[0]==="t"&&T[p[1]]){p[2]==="mcq"||p[2]==="def"?quiz(p[1],p[2]):pick(p[1])}else if(p[0]==="admin")admin();else home();scrollTo(0,0)}
 addEventListener("hashchange",route);route();
 </script></body></html>
